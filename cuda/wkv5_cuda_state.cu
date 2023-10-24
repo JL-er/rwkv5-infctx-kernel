@@ -6,16 +6,28 @@ typedef at::BFloat16 bf16;
 template <typename F>
 __global__ void kernel_forward(const int B, const int T, const int C, const int H,
                                const F *__restrict__ const _r, const F *__restrict__ const _k, const F *__restrict__ const _v, const float *__restrict__ _w, const F *__restrict__ _u,
-                               F *__restrict__ const _y)
+                               F *__restrict__ const _y, float *__restrict__ const last_state, float *__restrict__ const new_state)
 {
     const int b = blockIdx.x / H;
     const int h = blockIdx.x % H;
     const int i = threadIdx.x;
+    int offset = b*C + h*_N_ + i;
     _w += h*_N_;
     _u += h*_N_;
-
+    // printf("%d %f\n",offset+4, float(_k[offset+4]));
     __shared__ float r[_N_], k[_N_], u[_N_], w[_N_];
-    float state[_N_] = {0};
+    float state[_N_];
+    if(last_state==NULL){
+        state[_N_] = {0};
+    }else{
+        for(int ss=0, set=offset*_N_; ss<_N_; ++ss,++set){
+            state[ss] = last_state[set];
+            // printf("%d %f\n",set, state[ss] );
+        }
+    }
+ 
+    // printf("%d %f\n",offset);
+    //float state[_N_] = {0};
 
     __syncthreads();
     w[i] = _w[i];
@@ -28,7 +40,7 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
         r[i] = float(_r[t]);
         k[i] = float(_k[t]);
         __syncthreads();
-
+        //printf("%d %f\n",i, k[i]);
         const float v = float(_v[t]);
         float y = 0;
 
@@ -41,12 +53,12 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
             const float4& u_ = (float4&)(u[j]);
             float4& s = (float4&)(state[j]);
             float4 x;
+            // printf("%d %d %f\n",b*T*C + h*_N_ + i,offset*_N_+j, state[0]);
 
             x.x = k_.x * v;
             x.y = k_.y * v;
             x.z = k_.z * v;
             x.w = k_.w * v;
-
             y += r_.x * (u_.x * x.x + s.x);
             y += r_.y * (u_.y * x.y + s.y);
             y += r_.z * (u_.z * x.z + s.z);
@@ -56,6 +68,12 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
             s.y = s.y * w_.y + x.y;
             s.z = s.z * w_.z + x.z;
             s.w = s.w * w_.w + x.w;
+            if(new_state!=NULL){
+                new_state[offset*_N_+j] = s.x;
+                new_state[offset*_N_+j+1] = s.y;
+                new_state[offset*_N_+j+2] = s.z;
+                new_state[offset*_N_+j+3] = s.w;
+            }
         }
         _y[t] = F(y);
     }
@@ -64,11 +82,13 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
 template <typename F>
 __global__ void kernel_backward(const int B, const int T, const int C, const int H,
     const F *__restrict__ const _r, const F *__restrict__ const _k, const F *__restrict__ const _v, const float *__restrict__ _w, const float *__restrict__ __w, const F *__restrict__ _u, const F *__restrict__ const _gy,
-    F *__restrict__ const _gr, F *__restrict__ const _gk, F *__restrict__ const _gv, F *__restrict__ const _gw, F *__restrict__ const _gu)
+    F *__restrict__ const _gr, F *__restrict__ const _gk, F *__restrict__ const _gv, F *__restrict__ const _gw, F *__restrict__ const _gu, float *__restrict__ const last_state, float *__restrict__ const new_state)
 {
     const int b = blockIdx.x / H;
     const int h = blockIdx.x % H;
     const int i = threadIdx.x;
+    int offset = b*C + h*_N_ + i;
+
     _w += h*_N_;
     _u += h*_N_;
     __w += h*_N_;
@@ -84,8 +104,30 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
     const float ww = __w[i];
     const float u = u_[i];
 
-    float state[_N_] = {0}, saaaa[_N_] = {0}, sbbbb[_N_] = {0}, scccc[_N_] = {0}, sdddd[_N_] = {0};
-
+    float state[_N_], saaaa[_N_], sbbbb[_N_], scccc[_N_], sdddd[_N_];
+    // if(last_state==NULL){
+    //     state[_N_] = {0};
+    // }else{
+    //     for(int ss=0, set=offset*_N_; ss<_N_; ++ss,++set){
+    //         state[ss] = last_state[set];
+    //         // printf("%d %f\n",set, state[ss] );
+    //     }
+    if(last_state==NULL){
+        state[_N_] = {0};
+        saaaa[_N_] = {0};
+        sbbbb[_N_] = {0};
+        scccc[_N_] = {0};
+        sdddd[_N_] = {0};
+    }else{
+        for(int ss=0, set=offset*_N_; ss<_N_; ++ss,++set){
+            state[ss] = last_state[set];
+            saaaa[ss] = last_state[set];
+            sbbbb[ss] = last_state[set];
+            scccc[ss] = last_state[set];
+            sdddd[ss] = last_state[set];
+            // printf("%d %f\n",set, state[ss] );
+        }
+    }
     float gw = 0, gu = 0;
     const int t000 = b*T*C + h*_N_ + i;
     const int t111 = (b+1)*T*C + h*_N_ + i;
@@ -157,7 +199,7 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
         {
             float& s = scccc[j];
             float x = rr * gy[j];
-            
+            printf("scccc %d %f %d %f\n",t , s,j ,scccc[j]);
             gk += (u * x + s) * v[j];
             s = x + s * w;
         }
@@ -182,21 +224,22 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
             
             gv += (u_[j] * x + s) * k[j];
             s = x + s * w_[j];
+            printf("sdddd %d %f\n",t , s);
         }
         _gv[t] = F(gv);
     }
 }
 
-void cuda_forward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, bf16 *u, bf16 *y)
+void cuda_forward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, bf16 *u, bf16 *y, float *last_state, float *new_state)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);
-    kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, y);
+    kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, y, last_state, new_state);
 }
 
-void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, float *ww, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu)
+void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, float *ww, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu, float *last_state, float *new_state)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);
-    kernel_backward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, ww, u, gy, gr, gk, gv, gw, gu);
+    kernel_backward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, ww, u, gy, gr, gk, gv, gw, gu, last_state, new_state);
 }
