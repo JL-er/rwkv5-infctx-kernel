@@ -63,7 +63,10 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
             y += r_.y * (u_.y * x.y + s.y);
             y += r_.z * (u_.z * x.z + s.z);
             y += r_.w * (u_.w * x.w + s.w);
-
+            //printf("forward: %d %f %f %f %f\n",t,w_.x,x.x,s.x,s.x * w_.x + x.x);
+            // printf("forward: %d %f %f %f %f\n",t,w_.y,x.y,s.y,s.y * w_.y + x.y);
+            // printf("forward: %d %f %f %f %f\n",t,w_.z,x.z,s.z,s.z * w_.z + x.z);
+            // printf("forward: %d %f %f %f %f\n",t,w_.w,x.w,s.w,s.w * w_.w + x.w);
             s.x = s.x * w_.x + x.x;
             s.y = s.y * w_.y + x.y;
             s.z = s.z * w_.z + x.z;
@@ -82,7 +85,9 @@ __global__ void kernel_forward(const int B, const int T, const int C, const int 
 template <typename F>
 __global__ void kernel_backward(const int B, const int T, const int C, const int H,
     const F *__restrict__ const _r, const F *__restrict__ const _k, const F *__restrict__ const _v, const float *__restrict__ _w, const float *__restrict__ __w, const F *__restrict__ _u, const F *__restrict__ const _gy,
-    F *__restrict__ const _gr, F *__restrict__ const _gk, F *__restrict__ const _gv, F *__restrict__ const _gw, F *__restrict__ const _gu, float *__restrict__ const last_state, float *__restrict__ const new_state)
+    F *__restrict__ const _gr, F *__restrict__ const _gk, F *__restrict__ const _gv, F *__restrict__ const _gw, F *__restrict__ const _gu, float *__restrict__ const last_state, 
+    float *__restrict__ const last_sa, float *__restrict__ const last_sb, float *__restrict__ const last_sc, float *__restrict__ const last_sd, 
+    float *__restrict__ const  new_sa, float *__restrict__ const  new_sb, float *__restrict__ const  new_sc, float *__restrict__ const new_sd)
 {
     const int b = blockIdx.x / H;
     const int h = blockIdx.x % H;
@@ -105,13 +110,6 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
     const float u = u_[i];
 
     float state[_N_], saaaa[_N_], sbbbb[_N_], scccc[_N_], sdddd[_N_];
-    // if(last_state==NULL){
-    //     state[_N_] = {0};
-    // }else{
-    //     for(int ss=0, set=offset*_N_; ss<_N_; ++ss,++set){
-    //         state[ss] = last_state[set];
-    //         // printf("%d %f\n",set, state[ss] );
-    //     }
     if(last_state==NULL){
         state[_N_] = {0};
         saaaa[_N_] = {0};
@@ -119,12 +117,13 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
         scccc[_N_] = {0};
         sdddd[_N_] = {0};
     }else{
-        for(int ss=0, set=offset*_N_; ss<_N_; ++ss,++set){
+        for(int ss=0, set=offset; ss<_N_; ++ss,set+=_N_){
             state[ss] = last_state[set];
-            saaaa[ss] = last_state[set];
-            sbbbb[ss] = last_state[set];
-            scccc[ss] = last_state[set];
-            sdddd[ss] = last_state[set];
+            // printf("aaa %d %f", )
+            saaaa[ss] = last_sa[set];
+            sbbbb[ss] = last_sb[set];
+            scccc[ss] = last_sc[set];
+            sdddd[ss] = last_sd[set];
             // printf("%d %f\n",set, state[ss] );
         }
     }
@@ -142,7 +141,7 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
 
         const float k = float(_k[t]);
         float gr = 0, gu_ = 0;
-
+        // printf("state %d %f %f %f\n",t , gy[i], v[i],k);
         #pragma unroll
         for (int j = 0; j < _N_; j++)
         {
@@ -150,14 +149,20 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
             float x = k * v[j];
 
             gr += (u * x + s) * gy[j];
+            
             gu_ += x * gy[j];
+            //new_state[offset*_N_+j]
+            //printf("state %d %f %f %f %f\n",t , w, x, s, s * w + x);
             s = s * w + x;
+            // printf("state %d %f %f %f\n",t , x, gy[j], gu_);
         }
         _gr[t] = F(gr);
+        printf("state %d %f %f %f\n",t ,gu, float(_r[t]), gu_);
         gu += float(_r[t]) * gu_;
+        //printf("state %d %f %f %f\n",t ,gu, float(_r[t]), gu_);
     }
     _gu[b*C + h*_N_ + i] = F(gu);
-    
+    //printf("%d %d\n", t000, t222);
     for (int t = t000; t < t222; t += C)
     {
         __syncthreads();
@@ -172,13 +177,19 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
         for (int j = 0; j < _N_; j++)
         {
             float& s = saaaa[j];
-            float& s2 = sbbbb[j];
+            float& s2 = sbbbb[j]; //gsb
             float x = k * v[j];
+            
             
             float tmp = w * (x + s);
             s = tmp;
             s2 = tmp + w * s2;
             gw_ += s2 * gy[j];
+            if (last_sa!=NULL){
+                new_sa[offset*_N_+j]=s;
+                new_sb[offset*_N_+j]=s2;
+            }
+            //printf("saaaa %d %f %f %f\n",t , s, w,x);
         }
         gw += float(_r[t + 2*C]) * gw_;
     }    
@@ -199,9 +210,12 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
         {
             float& s = scccc[j];
             float x = rr * gy[j];
-            printf("scccc %d %f %d %f\n",t , s,j ,scccc[j]);
+            // printf("scccc %d %f %d %f\n",t , s,j ,scccc[j]);
             gk += (u * x + s) * v[j];
             s = x + s * w;
+            if (last_sc!=NULL){
+                new_sc[offset*_N_+j]=s;
+            }
         }
         _gk[t] = F(gk);
     }
@@ -224,7 +238,10 @@ __global__ void kernel_backward(const int B, const int T, const int C, const int
             
             gv += (u_[j] * x + s) * k[j];
             s = x + s * w_[j];
-            printf("sdddd %d %f\n",t , s);
+            if (last_sc!=NULL){
+                new_sd[offset*_N_+j]=s;
+            }
+            //printf("sdddd %d %f\n",t , s);
         }
         _gv[t] = F(gv);
     }
@@ -237,9 +254,9 @@ void cuda_forward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *
     kernel_forward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, u, y, last_state, new_state);
 }
 
-void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, float *ww, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu, float *last_state, float *new_state)
+void cuda_backward(int B, int T, int C, int H, bf16 *r, bf16 *k, bf16 *v, float *w, float *ww, bf16 *u, bf16 *gy, bf16 *gr, bf16 *gk, bf16 *gv, bf16 *gw, bf16 *gu, float *last_state, float *last_sa, float *last_sb, float *last_sc, float *last_sd, float *new_sa, float *new_sb, float *new_sc, float *new_sd)
 {
     assert(H*_N_ == C);
     assert(_N_%4 == 0);
-    kernel_backward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, ww, u, gy, gr, gk, gv, gw, gu, last_state, new_state);
+    kernel_backward<<<dim3(B * H), dim3(_N_)>>>(B, T, C, H, r, k, v, w, ww, u, gy, gr, gk, gv, gw, gu, last_state, last_sa, last_sb, last_sc, last_sd, new_sa, new_sb, new_sc, new_sd);
 }
