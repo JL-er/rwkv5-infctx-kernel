@@ -62,17 +62,22 @@ C = 4
 H = 1
 
 # 创建测试输入张量
-r = torch.randn(B, T, C, device='cuda', dtype=torch.bfloat16).contiguous()
-k = torch.randn(B, T, C,device='cuda', dtype=torch.bfloat16).contiguous()
-v = torch.randn(B, T, C,device='cuda', dtype=torch.bfloat16).contiguous()
-w = torch.randn(B, C,device='cuda', dtype=torch.float32).contiguous()
-u = torch.randn(B, C,device='cuda', dtype=torch.bfloat16).contiguous()
-y = torch.zeros(B, T, C, device='cuda', dtype=torch.bfloat16).contiguous()
-ls = torch.zeros((B, H, C//H, C//H), device='cuda', dtype=torch.float32).contiguous()
+r = torch.randn(B, T, C, device='cuda', dtype=torch.bfloat16,requires_grad=True).contiguous()
+k = torch.randn(B, T, C,device='cuda', dtype=torch.bfloat16,requires_grad=True).contiguous()
+v = torch.randn(B, T, C,device='cuda', dtype=torch.bfloat16,requires_grad=True).contiguous()
+w = torch.randn(B, C,device='cuda', dtype=torch.float32,requires_grad=True).contiguous()
+u = torch.randn(B, C,device='cuda', dtype=torch.bfloat16,requires_grad=True).contiguous()
+y = torch.zeros(B, T, C, device='cuda', dtype=torch.bfloat16,requires_grad=True).contiguous()
+ls = torch.zeros((B, H, C//H, C//H), device='cuda', dtype=torch.float32,requires_grad=True).contiguous()
 #ns = torch.zeros((B, H, C//H, C//H), device='cuda', dtype=torch.float32).contiguous()
 
 y,state = WKV_part.apply(B, T, C, H, r, k, v, w, u, ls)
 print(y)
+loss = ((y * y) - torch.tanh(y)).sum()
+with torch.autograd.profiler.profile(use_cuda=True) as prof:
+        loss.backward()
+
+#print('www', w.grad)
 
 r1 = r[:, :-4, :].clone()
 k1 = k[:, :-4, :].clone()
